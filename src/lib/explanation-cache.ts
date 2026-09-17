@@ -3,6 +3,12 @@ import { redis } from "@/lib/redis";
 
 const CACHE_TTL_SECONDS = 60 * 60 * 24; // 24 hours
 
+/**
+ * Bump when the explanation prompt, guard logic, or model routing changes in a
+ * way that can alter the security meaning of a cached explanation.
+ */
+export const EXPLANATION_SECURITY_VERSION = "v2";
+
 export interface CachedExplanation {
   explanation: string;
   remediationSuggestions: string;
@@ -14,8 +20,17 @@ export function createExplanationCacheKey(input: {
   severity: string;
   fileLocation: string;
   codeSnippet: string;
+  /** Optional model identity used by callers with explicit model routing. */
+  model?: string;
+  /** Optional caller-controlled prompt/guard revision. */
+  securityVersion?: string;
 }): string {
+  const model = input.model || process.env.GROQ_MODEL || "default";
+  const securityVersion = input.securityVersion || EXPLANATION_SECURITY_VERSION;
+
   const normalized = JSON.stringify({
+    securityVersion,
+    model,
     findingType: input.findingType,
     severity: input.severity,
     fileLocation: input.fileLocation,
@@ -24,7 +39,7 @@ export function createExplanationCacheKey(input: {
 
   const hash = createHash("sha256").update(normalized).digest("hex");
 
-  return `ai-explanation:${hash}`;
+  return `ai-explanation:${securityVersion}:${hash}`;
 }
 
 export async function getCachedExplanation(key: string): Promise<CachedExplanation | null> {
