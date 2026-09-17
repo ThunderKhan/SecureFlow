@@ -56,6 +56,8 @@ export interface ScanJobResult {
   policyDecision: "PASS" | "REVIEW" | "BLOCK";
   /** The scanner's verdict as `iq.evaluateFindings` phrased it, for logs and copy. */
   verdict: string;
+  /** False when any file-scanning chunk failed, so the verdict cannot be PASS. */
+  scanComplete: boolean;
   findings: EnrichedScanFinding[];
 }
 
@@ -169,6 +171,7 @@ export async function processScanJob(
 
   const allFindings: EnrichedScanFinding[] = [];
   let scannedFiles = 0;
+  let scanComplete = true;
 
   for (let i = 0; i < fileChanges.length; i += CHUNK_SIZE) {
     const chunk = fileChanges.slice(i, i + CHUNK_SIZE);
@@ -182,8 +185,10 @@ export async function processScanJob(
       );
       allFindings.push(...chunkFindings);
     } catch (err) {
+      scanComplete = false;
       console.error(`[ScanEngine] Error scanning chunk ${i}-${i + chunk.length}:`, err);
-      // Continue with next chunk — partial results are better than no results
+      // Continue so later chunks can still be reported, but the final policy
+      // decision will require human review rather than treating missing data as clean.
     }
 
     scannedFiles = Math.min(i + CHUNK_SIZE, totalFiles);
@@ -267,9 +272,9 @@ export async function processScanJob(
   );
 
   // --- Phase 4: Evaluate policy decision ---
-  const decision = iq.evaluateFindings(activeFindings);
-  // Both the check-run conclusion and the stored enum are derived from the same
-  // normalizer, so they can no longer disagree about what the scan decided.
+  // An incomplete scan is never a clean scan. REVIEW REQUIRED maps to the stored
+  // REVIEW enum and to an `action_required` GitHub check conclusion.
+  const decision = scanComplete ? iq.evaluateFindings(activeFindings) : "REVIEW REQUIRED" as const;
   const conclusion = checkRunConclusion(decision);
 
   // --- Phase 5: Post to GitHub ---
@@ -294,8 +299,8 @@ export async function processScanJob(
         status: "completed",
         conclusion,
         output: {
-          title: `Policy Decision: ${decision}`,
-          summary: `SecureFlow detected ${enrichedFindings.length} potential security issues across ${totalFiles} analyzed file(s).`,
+          title: `Policy Decision: ${decision}${scanComplete ? "" : " (INCOMPLETE SCAN)"}`,
+          summary: `SecureFlow detected ${enrichedFindings.length} potential security issues across ${totalFiles} analyzed file(s).${scanComplete ? "" : " One or more scan chunks failed; this result requires review."}`,
         },
       });
 
@@ -303,6 +308,9 @@ export async function processScanJob(
       if (enrichedFindings.length > 0) {
         let body = `### 🛡️ SecureFlow AI Security Report\n\n`;
         body += `⚠️ Detected **${enrichedFindings.length}** potential issues matching your code policies.\n\n`;
+        if (!scanComplete) {
+          body += `> ⚠️ **Scan incomplete:** one or more file chunks could not be analyzed. The policy decision is **REVIEW REQUIRED**.\n\n`;
+        }
 
         enrichedFindings.forEach((f) => {
           body += `#### ${severityBadge(f.severity)} | **${f.type}** in \`${f.fileLocation}\`\n`;
@@ -370,6 +378,7 @@ export async function processScanJob(
               findingsCount: enrichedFindings.length,
               totalFiles,
               riskScore: storedRiskScore(activeFindings),
+              scanComplete,
             },
           }),
         });
@@ -397,7 +406,7 @@ export async function processScanJob(
   const riskScore = storedRiskScore(activeFindings);
 
   console.log(
-    `[ScanEngine] Scan complete: ${enrichedFindings.length} findings, risk=${riskScore}, decision=${decision}`,
+    `[ScanEngine] Scan complete: ${enrichedFindings.length} findings, risk=${riskScore}, decision=${decision}, complete=${scanComplete}`,
   );
 
   if (persistenceError) {
@@ -411,6 +420,7 @@ export async function processScanJob(
     riskScore,
     policyDecision: storedPolicyDecision(decision),
     verdict: decision,
+    scanComplete,
     findings: enrichedFindings,
   };
 }
