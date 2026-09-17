@@ -1,7 +1,6 @@
 ﻿import { withRateLimit, TIERS } from "@/lib/middleware/rate-limit";
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/auth";
-// 2. Correct default Prisma import
 import prisma from "@/lib/prisma";
 import { generateRemediationPatchFlow } from "@/ai/flows/generate-remediation-patch";
 
@@ -21,17 +20,32 @@ const handler = async function POST(
 
     const { id } = await params;
     const findingId = id;
-    const finding = await prisma.finding.findUnique({
-      where: { id: findingId },
+
+    // Scope the finding lookup through the repository ownership chain. Using
+    // findFirst here is intentional: the finding id is unique, but the nested
+    // authorization predicate cannot be expressed safely as an independent
+    // authorization check without creating a time-of-check/time-of-use gap.
+    const finding = await prisma.finding.findFirst({
+      where: {
+        id: findingId,
+        scanResult: {
+          pullRequest: {
+            repository: {
+              userId: session.user.id,
+            },
+          },
+        },
+      },
       select: {
         id: true,
         codeSnippet: true,
         description: true,
-        filePath: true,
+        fileLocation: true,
       },
     });
 
     if (!finding) {
+      // Do not distinguish "missing" from "exists but belongs to someone else".
       return NextResponse.json({ error: "Finding not found" }, { status: 404 });
     }
 
@@ -39,7 +53,7 @@ const handler = async function POST(
     const aiResult = await generateRemediationPatchFlow({
       vulnerableCode: finding.codeSnippet || "",
       findingDescription: finding.description,
-      filePath: finding.filePath,
+      filePath: finding.fileLocation,
     });
 
     // Save to database
