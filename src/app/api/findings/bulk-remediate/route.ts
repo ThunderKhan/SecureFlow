@@ -60,6 +60,19 @@ const handler = async function POST(req: NextRequest) {
       );
     }
 
+    // A bulk patch is a single logical remediation artifact. Mixing findings
+    // from different repositories would make its file paths ambiguous and can
+    // cause a patch to be reviewed in the wrong repository context.
+    const repositoryIds = new Set(
+      findings.map((finding: any) => finding.scanResult.pullRequest.repositoryId),
+    );
+    if (repositoryIds.size !== 1) {
+      return NextResponse.json(
+        { error: "Bulk remediation requires all selected findings to belong to one repository" },
+        { status: 400 },
+      );
+    }
+
     // Enforce type homogeneity: bulk remediation requires findings of the same vulnerability type
     const types = Array.from(new Set(findings.map((f: any) => f.type)));
     if (types.length > 1) {
