@@ -4,6 +4,9 @@ import { auth } from "@/auth";
 import prisma from "@/lib/prisma";
 import { generateRemediationPatchFlow } from "@/ai/flows/generate-remediation-patch";
 
+const MAX_BULK_FINDINGS = 20;
+const MAX_CONCURRENT_REMEDIATIONS = 3;
+
 /* POST /api/findings/bulk-remediate */
 const handler = async function POST(req: NextRequest) {
   try {
@@ -28,6 +31,13 @@ const handler = async function POST(req: NextRequest) {
     ) {
       return NextResponse.json(
         { error: "findingIds must be a non-empty array of strings" },
+        { status: 400 },
+      );
+    }
+
+    if (findingIds.length > MAX_BULK_FINDINGS) {
+      return NextResponse.json(
+        { error: `A maximum of ${MAX_BULK_FINDINGS} findings can be remediated per request` },
         { status: 400 },
       );
     }
@@ -73,9 +83,18 @@ const handler = async function POST(req: NextRequest) {
       );
     }
 
-    // Generate individual remediation patches and store them
-    const results = await Promise.all(
-      findings.map(async (finding: any) => {
+    // Generate individual remediation patches with bounded concurrency. A worker
+    // pool keeps a single request from creating one simultaneous LLM call per
+    // selected finding, even at the request limit.
+    const results = new Array<any>(findings.length);
+    let nextIndex = 0;
+
+    const worker = async () => {
+      while (true) {
+        const index = nextIndex++;
+        if (index >= findings.length) return;
+
+        const finding = findings[index];
         const aiResult = await generateRemediationPatchFlow({
           vulnerableCode: finding.codeSnippet || "",
           findingDescription:
@@ -89,14 +108,17 @@ const handler = async function POST(req: NextRequest) {
           create: { findingId: finding.id, patchDiff: aiResult.patchDiff, status: "GENERATED" },
         });
 
-        return {
+        results[index] = {
           findingId: finding.id,
           fileLocation: finding.fileLocation,
           patch,
           explanation: aiResult.explanation,
         };
-      }),
-    );
+      }
+    };
+
+    const workerCount = Math.min(MAX_CONCURRENT_REMEDIATIONS, findings.length);
+    await Promise.all(Array.from({ length: workerCount }, () => worker()));
 
     // Combine individual diffs into a unified multi-file diff
     const combinedDiff = results.map((r: any) => r.patch.patchDiff).join("\n\n");
