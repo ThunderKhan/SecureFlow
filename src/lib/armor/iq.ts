@@ -33,11 +33,21 @@ export class ArmorIQPolicyEngine {
    * rather than BLOCKED or PASS — we know the scanner reported something, we
    * just cannot rank it, so a human should look.
    */
-  evaluateFindings(findings: ScanFinding[]): PolicyResult {
+  evaluateFindings(
+    findings: ScanFinding[],
+    options: { complete?: boolean } = {},
+  ): PolicyResult {
     if (findings.some((f) => parseSeverity(f.severity) === "CRITICAL")) {
       return "BLOCKED";
     }
 
+    // A scan that did not inspect every requested chunk is not evidence of a
+    // clean pull request. Preserve BLOCKED for confirmed critical findings,
+    // but require review whenever coverage is incomplete so partial results
+    // can never become a clean PASS.
+    if (options.complete === false) {
+      return "REVIEW REQUIRED";
+    }
     if (
       findings.some((f) => isAtLeast(f.severity, "MEDIUM") || parseSeverity(f.severity) === null)
     ) {
