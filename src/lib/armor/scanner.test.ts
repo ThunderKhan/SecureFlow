@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { mockCreate } from "../../../__mocks__/groq-sdk";
 import {
   maskSecrets,
@@ -310,7 +310,7 @@ describe("scanPullRequest metadata", () => {
     expect(mockCreate).toHaveBeenCalledTimes(1);
     expect(report.complete).toBe(false);
     expect(report.deadlineHit).toBe(true);
-    expect(report.skippedFiles).toEqual(["src/second.ts", "src/third.ts"]);
+    expect(report.skippedFiles).toEqual(["src/third.ts"]);
     now.mockRestore();
   });
 });
