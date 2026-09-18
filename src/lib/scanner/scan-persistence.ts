@@ -248,6 +248,7 @@ export interface ScanJobCompletion {
   vulnerabilitiesFound: number;
   riskScore: number;
   policyDecision: StoredPolicyDecision;
+  error?: string;
   completedAt: Date;
 }
 
@@ -268,15 +269,28 @@ export function scanJobCompletion(
     vulnerabilitiesFound: number;
     riskScore: number;
     policyDecision: unknown;
+    scanComplete?: boolean;
+    scanIssues?: readonly string[];
   },
   completedAt: Date = new Date(),
 ): ScanJobCompletion {
+  const scanComplete = result.scanComplete !== false;
+  const scanIssues = result.scanIssues ?? [];
+
   return {
     status: "COMPLETED",
     scannedFiles: result.scannedFiles,
     vulnerabilitiesFound: result.vulnerabilitiesFound,
     riskScore: Math.round(result.riskScore),
     policyDecision: storedPolicyDecision(result.policyDecision),
+    ...(scanComplete
+      ? {}
+      : {
+          error:
+            scanIssues.length > 0
+              ? `Scan incomplete: ${scanIssues.join(" ")}`
+              : "Scan incomplete: one or more chunks could not be analyzed.",
+        }),
     completedAt,
   };
 }
