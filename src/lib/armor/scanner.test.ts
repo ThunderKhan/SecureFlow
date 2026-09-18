@@ -236,6 +236,84 @@ describe("sanitizeRecursively", () => {
 
 // ─── filterFalsePositives ─────────────────────────────────────────────────────
 
+describe("scanPullRequest metadata", () => {
+  it("reports complete coverage without changing the default array API", async () => {
+    mockCreate.mockReset();
+    mockCreate.mockResolvedValueOnce({ choices: [{ message: { content: '{"findings": []}' } }] });
+    const scannerInstance = new ArmorIQScanner();
+
+    const findings = await scannerInstance.scanPullRequest(
+      [{ filename: "src/index.ts", patch: "+const value = 1;" }],
+      [],
+    );
+    expect(findings).toEqual([]);
+
+    mockCreate.mockResolvedValueOnce({ choices: [{ message: { content: '{"findings": []}' } }] });
+    const report = await scannerInstance.scanPullRequest(
+      [{ filename: "src/index.ts", patch: "+const value = 1;" }],
+      [],
+      [],
+      [],
+      { returnMetadata: true },
+    );
+
+    expect(report).toEqual({ findings: [], complete: true, skippedFiles: [], deadlineHit: false });
+  });
+
+  it("reports files left in the final batch when the deadline is hit", async () => {
+    mockCreate.mockReset();
+    const now = vi.spyOn(Date, "now")
+      .mockReturnValueOnce(0)
+      .mockReturnValueOnce(0)
+      .mockReturnValue(300_001);
+    const scannerInstance = new ArmorIQScanner();
+
+    const report = await scannerInstance.scanPullRequest(
+      [{ filename: "src/final.ts", patch: "+const value = 1;" }],
+      [],
+      [],
+      [],
+      { returnMetadata: true },
+    );
+
+    expect(report.findings).toEqual([]);
+    expect(report.complete).toBe(false);
+    expect(report.deadlineHit).toBe(true);
+    expect(report.skippedFiles).toEqual(["src/final.ts"]);
+    expect(mockCreate).not.toHaveBeenCalled();
+    now.mockRestore();
+  });
+
+  it("reports the current and remaining files when the deadline hits between batches", async () => {
+    mockCreate.mockReset();
+    const largePatch = "+" + "x".repeat(30_000);
+    mockCreate.mockResolvedValueOnce({ choices: [{ message: { content: '{"findings": []}' } }] });
+    const now = vi.spyOn(Date, "now")
+      .mockReturnValueOnce(0)
+      .mockReturnValueOnce(0)
+      .mockReturnValueOnce(0)
+      .mockReturnValue(300_001);
+    const scannerInstance = new ArmorIQScanner();
+
+    const report = await scannerInstance.scanPullRequest(
+      [
+        { filename: "src/first.ts", patch: largePatch },
+        { filename: "src/second.ts", patch: largePatch },
+        { filename: "src/third.ts", patch: "+const value = 3;" },
+      ],
+      [],
+      [],
+      [],
+      { returnMetadata: true },
+    );
+
+    expect(mockCreate).toHaveBeenCalledTimes(1);
+    expect(report.complete).toBe(false);
+    expect(report.deadlineHit).toBe(true);
+    expect(report.skippedFiles).toEqual(["src/second.ts", "src/third.ts"]);
+    now.mockRestore();
+  });
+});
 describe("filterFalsePositives", () => {
   const makeFinding = (overrides: Partial<ScanFinding> = {}): ScanFinding => ({
     type: "Secret",
