@@ -33,11 +33,18 @@ export class ArmorIQPolicyEngine {
    * rather than BLOCKED or PASS — we know the scanner reported something, we
    * just cannot rank it, so a human should look.
    */
-  evaluateFindings(findings: ScanFinding[]): PolicyResult {
-    if (findings.some((f) => parseSeverity(f.severity) === "CRITICAL")) {
+  evaluateFindings(
+    findings: ScanFinding[],
+    options: { complete?: boolean } = {},
+  ): PolicyResult {    if (findings.some((f) => parseSeverity(f.severity) === "CRITICAL")) {
       return "BLOCKED";
     }
 
+    // A truncated scan is not evidence of a clean pull request. Preserve
+    // BLOCKED for a confirmed critical finding, otherwise force manual review.
+    if (options.complete === false) {
+      return "REVIEW REQUIRED";
+    }
     if (
       findings.some((f) => isAtLeast(f.severity, "MEDIUM") || parseSeverity(f.severity) === null)
     ) {
