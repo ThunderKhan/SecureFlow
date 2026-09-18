@@ -231,10 +231,10 @@ export async function processScanJob(
   // --- Phase 3: Enrich findings with AI explanations ---
   onProgress({
     phase: "enriching",
-    scannedFiles: totalFiles,
+    scannedFiles,
     totalFiles,
     vulnerabilitiesFound: allFindings.length,
-    progress: 90,
+    progress: progressPercent(scannedFiles, totalFiles),
   });
 
   // Compute fingerprints. `EnrichedScanFinding` declares the field; `ScanFinding`
@@ -294,10 +294,10 @@ export async function processScanJob(
   // --- Phase 5: Post to GitHub ---
   onProgress({
     phase: "posting",
-    scannedFiles: totalFiles,
+    scannedFiles,
     totalFiles,
     vulnerabilitiesFound: enrichedFindings.length,
-    progress: 95,
+    progress: progressPercent(scannedFiles, totalFiles),
   });
 
   if (report) {
