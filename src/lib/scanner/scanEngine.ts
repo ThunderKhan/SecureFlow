@@ -286,7 +286,8 @@ export async function processScanJob(
 
   // --- Phase 4: Evaluate policy decision ---
   const scanComplete = !deadlineHit;
-  const decision = iq.evaluateFindings(activeFindings, { complete: scanComplete });  // Both the check-run conclusion and the stored enum are derived from the same
+  const decision = iq.evaluateFindings(activeFindings, { complete: scanComplete });
+  // Both the check-run conclusion and the stored enum are derived from the same
   // normalizer, so they can no longer disagree about what the scan decided.
   const conclusion = checkRunConclusion(decision);
 
@@ -315,7 +316,8 @@ export async function processScanJob(
           title: `Policy Decision: ${decision}`,
           summary: scanComplete
             ? `SecureFlow detected ${enrichedFindings.length} potential security issues across ${totalFiles} analyzed file(s).`
-            : `⚠️ SecureFlow scan incomplete: ${enrichedFindings.length} potential issue(s) found across ${scannedFiles} analyzed file(s); ${new Set(skippedFiles).size} file(s) were not analyzed because the scanner deadline was reached. Verdict requires review.`,        },
+            : `⚠️ SecureFlow scan incomplete: ${enrichedFindings.length} potential issue(s) found across ${scannedFiles} analyzed file(s); ${new Set(skippedFiles).size} file(s) were not analyzed because the scanner deadline was reached. Verdict requires review.`,
+        },
       });
 
       // Post PR comment if there are findings
