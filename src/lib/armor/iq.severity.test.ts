@@ -68,6 +68,10 @@ describe("ArmorIQPolicyEngine.evaluateFindings", () => {
     expect(() => engine.evaluateFindings([finding(null)])).not.toThrow();
   });
 
+  it("requires review when scan coverage is incomplete", () => {
+    expect(engine.evaluateFindings([], { complete: false })).toBe("REVIEW REQUIRED");
+    expect(engine.evaluateFindings([finding("LOW")], { complete: false })).toBe("REVIEW REQUIRED");
+  });
   it("lets the most severe finding decide the outcome", () => {
     const mixed = [finding("LOW"), finding("none"), finding("critical"), finding("MEDIUM")];
     expect(engine.evaluateFindings(mixed)).toBe("BLOCKED");
