@@ -256,6 +256,60 @@ function decodeOneLayer(input: string): string {
   return out;
 }
 
+/**
+ * Encode attacker-controlled filenames before embedding them in the scanner's
+ * XML-like prompt envelope. The model needs to see the original name, but the name
+ * must never be able to close an attribute or inject another tag.
+ */
+export function escapePromptAttribute(value: string): string {
+  let escaped = "";
+
+  for (const character of value) {
+    const codePoint = character.codePointAt(0)!;
+
+    switch (character) {
+      case "&":
+        escaped += "&amp;";
+        break;
+      case '"':
+        escaped += "&quot;";
+        break;
+      case "'":
+        escaped += "&apos;";
+        break;
+      case "<":
+        escaped += "&lt;";
+        break;
+      case ">":
+        escaped += "&gt;";
+        break;
+      case "\\":
+        escaped += "&#x5C;";
+        break;
+      case "\t":
+        escaped += "&#x9;";
+        break;
+      case "\n":
+        escaped += "&#xA;";
+        break;
+      case "\r":
+        escaped += "&#xD;";
+        break;
+      default:
+        if (
+          (codePoint >= 0 && codePoint <= 0x1f) ||
+          (codePoint >= 0x7f && codePoint <= 0x9f)
+        ) {
+          escaped += `&#x${codePoint.toString(16).toUpperCase()};`;
+        } else {
+          escaped += character;
+        }
+    }
+  }
+
+  return escaped;
+}
+
 export function sanitizeRecursively(input: string): string {
   let current = input;
 
@@ -534,8 +588,9 @@ export class ArmorIQScanner {
       }
       const sanitizedLines = sanitizeRecursively(addedLines);
       const maskedLines = maskIngressFileContent(sanitizedLines);
+      const safeFilename = escapePromptAttribute(file.filename);
       const wrapperOverhead =
-        `<file name="${file.filename}" context_warning="${fileContext}">\n\n</file>\n\n`.length;
+        `<file name="${safeFilename}" context_warning="${fileContext}">\n\n</file>\n\n`.length;
       const maxContentSize = MAX_COMBINED_LENGTH - wrapperOverhead;
 
       let fileContent = maskedLines;
@@ -547,7 +602,7 @@ export class ArmorIQScanner {
         fileContent = fileContent.substring(0, truncateIndex) + truncationMsg;
       }
 
-      const fileContentBlock = `<file name="${file.filename}" context_warning="${fileContext}">
+      const fileContentBlock = `<file name="${safeFilename}" context_warning="${fileContext}">
 ${fileContent}
 </file>
 
