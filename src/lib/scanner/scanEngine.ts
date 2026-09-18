@@ -44,6 +44,10 @@ export interface ScanJobResult {
   scanJobId: string;
   scannedFiles: number;
   vulnerabilitiesFound: number;
+  /** False when at least one scan chunk failed and the findings are partial. */
+  scanComplete: boolean;
+  /** Safe, provider-secret-free reasons for failed scan chunks. */
+  scanIssues: string[];
   riskScore: number;
   /**
    * The stored `PolicyDecision` member, not the scanner's phrasing.
@@ -168,6 +172,7 @@ export async function processScanJob(
   });
 
   const allFindings: EnrichedScanFinding[] = [];
+  const scanIssues: string[] = [];
   let scannedFiles = 0;
 
   for (let i = 0; i < fileChanges.length; i += CHUNK_SIZE) {
@@ -182,8 +187,12 @@ export async function processScanJob(
       );
       allFindings.push(...chunkFindings);
     } catch (err) {
-      console.error(`[ScanEngine] Error scanning chunk ${i}-${i + chunk.length}:`, err);
-      // Continue with next chunk — partial results are better than no results
+      const errorKind = err instanceof Error && err.name ? err.name : typeof err;
+      const chunkLabel = `Chunk ${i}-${i + chunk.length}`;
+      scanIssues.push(`${chunkLabel} failed (${errorKind}).`);
+      console.error(`[ScanEngine] Error scanning ${chunkLabel}:`, err);
+      // Continue with later chunks, but retain the incomplete state so partial
+      // findings can never be mistaken for a clean, fully scanned PR.
     }
 
     scannedFiles = Math.min(i + CHUNK_SIZE, totalFiles);
@@ -267,8 +276,8 @@ export async function processScanJob(
   );
 
   // --- Phase 4: Evaluate policy decision ---
-  const decision = iq.evaluateFindings(activeFindings);
-  // Both the check-run conclusion and the stored enum are derived from the same
+  const scanComplete = scanIssues.length === 0;
+  const decision = iq.evaluateFindings(activeFindings, { complete: scanComplete });  // Both the check-run conclusion and the stored enum are derived from the same
   // normalizer, so they can no longer disagree about what the scan decided.
   const conclusion = checkRunConclusion(decision);
 
@@ -295,8 +304,9 @@ export async function processScanJob(
         conclusion,
         output: {
           title: `Policy Decision: ${decision}`,
-          summary: `SecureFlow detected ${enrichedFindings.length} potential security issues across ${totalFiles} analyzed file(s).`,
-        },
+          summary: scanComplete
+            ? `SecureFlow detected ${enrichedFindings.length} potential security issues across ${totalFiles} analyzed file(s).`
+            : `⚠️ SecureFlow scan incomplete: ${enrichedFindings.length} potential issue(s) found across ${totalFiles} processed file(s). ${scanIssues.join(" ")} Verdict requires review because scan coverage was incomplete.`,        },
       });
 
       // Post PR comment if there are findings
@@ -370,8 +380,9 @@ export async function processScanJob(
               findingsCount: enrichedFindings.length,
               totalFiles,
               riskScore: storedRiskScore(activeFindings),
-            },
-          }),
+              scanComplete,
+              scanIssues,
+            },          }),
         });
       }
     } catch (err) {
@@ -408,6 +419,8 @@ export async function processScanJob(
     scanJobId,
     scannedFiles: totalFiles,
     vulnerabilitiesFound: enrichedFindings.length,
+    scanComplete,
+    scanIssues,
     riskScore,
     policyDecision: storedPolicyDecision(decision),
     verdict: decision,
