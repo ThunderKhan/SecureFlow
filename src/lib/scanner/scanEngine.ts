@@ -44,6 +44,10 @@ export interface ScanJobResult {
   scanJobId: string;
   scannedFiles: number;
   vulnerabilitiesFound: number;
+  /** False when the scanner deadline caused one or more files to be skipped. */
+  scanComplete: boolean;
+  /** Safe scan-coverage messages; no provider response bodies are persisted. */
+  scanIssues: string[];
   riskScore: number;
   /**
    * The stored `PolicyDecision` member, not the scanner's phrasing.
@@ -168,25 +172,39 @@ export async function processScanJob(
   });
 
   const allFindings: EnrichedScanFinding[] = [];
+  const scanIssues: string[] = [];
+  const skippedFiles: string[] = [];
+  let deadlineHit = false;
   let scannedFiles = 0;
 
   for (let i = 0; i < fileChanges.length; i += CHUNK_SIZE) {
     const chunk = fileChanges.slice(i, i + CHUNK_SIZE);
 
     try {
-      const chunkFindings = await scanner.scanPullRequest(
+      const chunkReport = await scanner.scanPullRequest(
         chunk,
         activePolicies as any[],
         customIgnores,
         customPlaceholders,
+        { returnMetadata: true },
       );
-      allFindings.push(...chunkFindings);
+      allFindings.push(...chunkReport.findings);
+      scannedFiles += Math.max(0, chunk.length - chunkReport.skippedFiles.length);
+
+      if (!chunkReport.complete) {
+        deadlineHit = true;
+        skippedFiles.push(...chunkReport.skippedFiles);
+        scanIssues.push(
+          `Chunk ${i}-${i + chunk.length}: scan deadline reached; skipped ${chunkReport.skippedFiles.length} file(s).`,
+        );
+      }
     } catch (err) {
-      console.error(`[ScanEngine] Error scanning chunk ${i}-${i + chunk.length}:`, err);
-      // Continue with next chunk — partial results are better than no results
+      const errorKind = err instanceof Error && err.name ? err.name : typeof err;
+      const chunkLabel = `Chunk ${i}-${i + chunk.length}`;
+      scanIssues.push(`${chunkLabel} failed (${errorKind}).`);
+      console.error(`[ScanEngine] Error scanning ${chunkLabel}:`, err);
     }
 
-    scannedFiles = Math.min(i + CHUNK_SIZE, totalFiles);
     const vulnCount = allFindings.length;
     const progress = progressPercent(scannedFiles, totalFiles);
 
@@ -267,8 +285,8 @@ export async function processScanJob(
   );
 
   // --- Phase 4: Evaluate policy decision ---
-  const decision = iq.evaluateFindings(activeFindings);
-  // Both the check-run conclusion and the stored enum are derived from the same
+  const scanComplete = !deadlineHit;
+  const decision = iq.evaluateFindings(activeFindings, { complete: scanComplete });  // Both the check-run conclusion and the stored enum are derived from the same
   // normalizer, so they can no longer disagree about what the scan decided.
   const conclusion = checkRunConclusion(decision);
 
@@ -295,8 +313,9 @@ export async function processScanJob(
         conclusion,
         output: {
           title: `Policy Decision: ${decision}`,
-          summary: `SecureFlow detected ${enrichedFindings.length} potential security issues across ${totalFiles} analyzed file(s).`,
-        },
+          summary: scanComplete
+            ? `SecureFlow detected ${enrichedFindings.length} potential security issues across ${totalFiles} analyzed file(s).`
+            : `⚠️ SecureFlow scan incomplete: ${enrichedFindings.length} potential issue(s) found across ${scannedFiles} analyzed file(s); ${new Set(skippedFiles).size} file(s) were not analyzed because the scanner deadline was reached. Verdict requires review.`,        },
       });
 
       // Post PR comment if there are findings
@@ -370,8 +389,10 @@ export async function processScanJob(
               findingsCount: enrichedFindings.length,
               totalFiles,
               riskScore: storedRiskScore(activeFindings),
-            },
-          }),
+              scanComplete,
+              deadlineHit,
+              skippedFiles: [...new Set(skippedFiles)],
+            },          }),
         });
       }
     } catch (err) {
@@ -406,8 +427,10 @@ export async function processScanJob(
 
   return {
     scanJobId,
-    scannedFiles: totalFiles,
+    scannedFiles,
     vulnerabilitiesFound: enrichedFindings.length,
+    scanComplete,
+    scanIssues,
     riskScore,
     policyDecision: storedPolicyDecision(decision),
     verdict: decision,
