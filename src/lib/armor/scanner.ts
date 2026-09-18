@@ -379,6 +379,12 @@ export interface ScannerPolicy {
   [key: string]: unknown;
 }
 
+export interface ScanPullRequestReport {
+  findings: ScanFinding[];
+  complete: boolean;
+  skippedFiles: string[];
+  deadlineHit: boolean;
+}
 export class ArmorIQScanner {
   /**
    * Merges the expanded multi-language registry into the shared engine (#751).
@@ -431,16 +437,34 @@ export class ArmorIQScanner {
 
   async scanPullRequest(
     files: FileChange[],
+    activePolicies?: ScannerPolicy[],
+    customIgnores?: string[],
+    customPlaceholders?: string[],
+    options?: { returnMetadata?: false },
+  ): Promise<ScanFinding[]>;
+
+  async scanPullRequest(
+    files: FileChange[],
+    activePolicies: ScannerPolicy[],
+    customIgnores: string[],
+    customPlaceholders: string[],
+    options: { returnMetadata: true },
+  ): Promise<ScanPullRequestReport>;
+
+  async scanPullRequest(
+    files: FileChange[],
     activePolicies: ScannerPolicy[] = [],
     customIgnores: string[] = [],
     customPlaceholders: string[] = [],
-  ): Promise<ScanFinding[]> {
+    options: { returnMetadata?: boolean } = {},
+  ): Promise<ScanFinding[] | ScanPullRequestReport> {
     const scanStartedAt = Date.now();
     const deadlineExceeded = () => Date.now() - scanStartedAt > MAX_TOTAL_SCAN_MS;
 
     let currentBatch = "";
     let currentBatchFiles: string[] = [];
     const allFindings: ScanFinding[] = [];
+    const skippedFiles: string[] = [];
     const ABSOLUTE_MAX_FILE_SIZE = 50000;
     const MAX_COMBINED_LENGTH = 32000;
 
@@ -479,6 +503,10 @@ export class ArmorIQScanner {
     for (const file of files) {
       if (deadlineExceeded()) {
         deadlineHit = true;
+        const startIndex = files.indexOf(file);
+        if (startIndex >= 0) {
+          skippedFiles.push(...files.slice(startIndex).map((skipped) => skipped.filename));
+        }
         console.warn(
           `⏱️ Scan deadline (${MAX_TOTAL_SCAN_MS / 1000}s) exceeded — skipping remaining files starting at ${file.filename}. Returning partial findings.`,
         );
@@ -859,6 +887,7 @@ CRITICAL RULES:
       allFindings.push(...batchFindings);
     } else if (currentBatch.length > 0) {
       deadlineHit = true;
+      skippedFiles.push(...currentBatchFiles);
       console.warn(
         `⏱️ Scan deadline exceeded before the final batch (${currentBatchFiles.join(", ")}) could run — dropped from results.`,
       );
@@ -870,8 +899,14 @@ CRITICAL RULES:
       );
     }
 
-    return allFindings;
+    const report: ScanPullRequestReport = {
+      findings: allFindings,
+      complete: !deadlineHit,
+      skippedFiles: [...new Set(skippedFiles)],
+      deadlineHit,
+    };
+
+    return options.returnMetadata ? report : report.findings;
   }
 }
-
 export const scanner = new ArmorIQScanner();
