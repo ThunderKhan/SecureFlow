@@ -264,6 +264,23 @@ describe("scanJobCompletion", () => {
     });
   });
 
+  it("records deadline truncation on the completed job", () => {
+    const update = scanJobCompletion(
+      {
+        scannedFiles: 1,
+        vulnerabilitiesFound: 0,
+        riskScore: 0,
+        policyDecision: "PASS",
+        scanComplete: false,
+        scanIssues: ["Scan deadline reached; skipped 2 file(s)."],
+      },
+      completedAt,
+    );
+
+    expect(update.status).toBe("COMPLETED");
+    expect(update.error).toContain("Scan incomplete");
+    expect(update.error).toContain("skipped 2 file(s)");
+  });
   it("completes a blocked scan rather than failing it", () => {
     const update = scanJobCompletion(
       { scannedFiles: 1, vulnerabilitiesFound: 1, riskScore: 10, policyDecision: "BLOCKED" },
